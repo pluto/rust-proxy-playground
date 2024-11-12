@@ -1,0 +1,24 @@
+[package]
+authors     = ["Pluto developers <pluto.xyz>"]
+description = """web proofs by TEE"""
+edition     = "2021"
+license     = "Apache2.0 OR MIT"
+name        = "web-proof-tee-proxy"
+repository  = "https://github.com/pluto/web-proof-tee"
+version     = "0.1.0"
+
+[dependencies]
+anyhow             = "1.0"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tokio              = { version = "1", features = ["full"] }
+# futures            = "0.3"
+
+[dev-dependencies]
+rstest     = "0.18"
+env_logger = "0.11"
+criterion  = "0.5"
+
+# [[bench]]
+# name = "bench"
+# harness = false
