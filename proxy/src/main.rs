@@ -109,8 +109,7 @@ async fn forward_request(target_url: &str) -> Result<impl IntoResponse> {
 
     let status = StatusCode::from_u16(response.status().as_u16())?;
     let body: Value = response.json().await?;
-
-    debug!(status = ?status, "Received response from target");
+    debug!("Parsed response body: {:?}", body);
 
     Ok((status, Json(body)))
 }

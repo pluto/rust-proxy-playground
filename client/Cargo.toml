@@ -3,7 +3,7 @@ authors     = ["Pluto developers <pluto.xyz>"]
 description = """TEE client"""
 edition     = "2021"
 license     = "Apache2.0 OR MIT"
-name        = "web-proof-tee-client"
+name        = "client"
 repository  = "https://github.com/pluto/web-proof-tee"
 version     = "0.1.0"
 

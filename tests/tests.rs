@@ -1,66 +1,119 @@
+//! Integration tests
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(dead_code)]
 #![allow(unreachable_code)]
 #![allow(non_snake_case)]
 #![allow(clippy::clone_on_copy)]
-//! Integration tests
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
+use std::time::Duration;
 
-static INIT: std::sync::Once = std::sync::Once::new();
-fn setup_test_tracing() {
-    INIT.call_once(|| {
-        let subscriber =
-            FmtSubscriber::builder().with_max_level(Level::INFO).with_test_writer().finish();
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("setting default subscriber failed");
-    });
-}
-use arbitrary::Arbitrary;
-use rstest::{fixture, rstest};
-// rstest provides features to take common context into tests, and set up small cases testing
-#[derive(Clone, Debug, Eq, PartialEq, Arbitrary)]
-struct Wb {
-    b:     bool,
-    count: usize,
-}
-// context setup function to be implicitly called by `wb`
-#[fixture]
-fn count() -> usize { return 0usize; }
-// context setup function to be implicitly called by `test_wb`
-#[fixture]
-fn wb(#[default(false)] b: bool, count: usize) -> Wb {
-    setup_test_tracing();
-    Wb { b, count }
+use anyhow::Result;
+use once_cell::sync::Lazy;
+use rstest::*;
+use tokio::time::sleep;
+use tracing::{debug, error, info, instrument, warn};
+use tracing_subscriber::fmt::format::FmtSpan;
+
+static TEST_PORT: Lazy<String> = Lazy::new(|| "3333".to_string());
+static TEST_SERVER: Lazy<String> = Lazy::new(|| format!("http://localhost:{}", *TEST_PORT));
+
+/// Helper struct to manage server lifecycle
+#[derive(Debug)]
+struct TestServer {
+    handle: tokio::process::Child,
 }
 
-// small-cases fuzzing
-// argument wb will inherit the above function if names match; will generate 3x3 case-tests
-#[rstest]
-#[case(0, true, true)]
-#[case(1, true, false)]
-fn test_wb(wb: Wb, #[case] n: usize, #[case] b: bool, #[case] expected: bool) {
-    tracing::info!("wb: {wb:?}");
-    let wb_ = Wb { count: n, b };
-    assert_eq!(wb == wb_, expected); // this will fail for case_1 cases
+impl Drop for TestServer {
+    fn drop(&mut self) { let _ = self.handle.start_kill(); }
 }
 
-// ex 2 - baby fuzz; will generate 2x2 test cases
-#[rstest]
-fn test_enumerative(#[values(0, 4)] n: usize, #[values(7, 8)] m: usize) {
-    assert!(n < m);
-}
+impl TestServer {
+    async fn start() -> Result<Self> {
+        info!("Starting test server on port {}", *TEST_PORT);
+        let handle = tokio::process::Command::new("cargo")
+            .args(["run", "-p", "proxy", "--"])
+            .env("PROXY_PORT", &*TEST_PORT)  // Changed from PORT to PROXY_PORT
+            .env("RUST_LOG", "debug")
+            .kill_on_drop(true)
+            .spawn()?;
 
-// fuzz test
-fn reverse<T: Clone>(xs: &[T]) -> Vec<T> {
-    let mut rev = vec![];
-    for x in xs.iter() {
-        rev.insert(0, x.clone())
+        // Wait longer for server startup
+        info!("Waiting for server to start up");
+        sleep(Duration::from_secs(2)).await; // Increased from 5ms to 2s
+
+        // Verify server is running by attempting to connect
+        let client = reqwest::Client::new();
+        let max_retries = 5;
+        for i in 0..max_retries {
+            match client.get(&*TEST_SERVER).send().await {
+                Ok(_) => {
+                    info!("Server is ready!");
+                    break;
+                },
+                Err(e) => {
+                    if i == max_retries - 1 {
+                        error!("Server failed to start after {} retries: {}", max_retries, e);
+                        return Err(anyhow::anyhow!("Server failed to start"));
+                    }
+                    warn!("Server not ready, retrying in 1s...");
+                    sleep(Duration::from_secs(1)).await;
+                },
+            }
+        }
+
+        Ok(Self { handle })
     }
-    rev
+
+    #[instrument]
+    async fn stop(mut self) -> Result<()> {
+        info!("Stopping test server");
+        self.handle.kill().await?;
+        Ok(())
+    }
 }
 
-// fuzz, declare quickcheck on any argument implementing Arbitrary
-#[quickcheck_macros::quickcheck]
-fn prop(xs: Vec<u32>) -> bool { xs == reverse(&reverse(&xs)) }
+/// Test fixture for managing server and client setup
+#[derive(Debug)]
+struct TestContext {
+    server: TestServer,
+    client: reqwest::Client,
+}
+
+/// Initialize tracing for tests
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("debug")
+        .with_span_events(FmtSpan::CLOSE)
+        .with_test_writer()
+        .try_init();
+}
+
+/// Fixture setup function
+#[fixture]
+async fn test_context() -> TestContext {
+    init_tracing();
+    info!("Setting up test context");
+    let server = TestServer::start().await.expect("Failed to start test server");
+    let client = reqwest::Client::new();
+    TestContext { server, client }
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_proxy_forwarding(#[future] test_context: TestContext) -> Result<()> {
+    let ctx = test_context.await;
+    let test_url = "https://gist.githubusercontent.com/mattes/23e64faadb5fd4b5112f379903d2572e/raw/ddbf0a56001367467f71bda64347aa881d83533c/example.json";
+
+    info!("Sending request through proxy to {}", test_url);
+    let response = ctx.client.get(&*TEST_SERVER).header("X-Target-URL", test_url).send().await?;
+
+    debug!(status = ?response.status(), "Received response");
+    assert!(response.status().is_success());
+
+    let body: serde_json::Value = response.json().await?;
+    debug!(body = ?body, "Parsed response body");
+    assert_eq!(body["hello"], "world");
+
+    ctx.server.stop().await?;
+    Ok(())
+}

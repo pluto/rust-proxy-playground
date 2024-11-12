@@ -10,13 +10,8 @@ use std::env;
 
 use anyhow::{Context, Result};
 use dotenv::dotenv;
-use serde::Deserialize;
+use serde_json::Value;
 use tracing::{debug, error, info, warn};
-
-#[derive(Clone, Debug, Deserialize)]
-struct Response {
-    _hello: String,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,7 +59,7 @@ async fn main() -> Result<()> {
         anyhow::bail!("Request failed with status {}: {}", status, text);
     }
 
-    let data: Response = response.json().await.context("Failed to parse response as JSON")?;
+    let data: Value = response.json().await.context("Failed to parse response as JSON")?;
     info!(
         response = ?data,
         "Successfully received and parsed response"

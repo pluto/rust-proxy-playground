@@ -6,6 +6,10 @@
   web proofs by TEE
 </p>
 
+## demo of client-proxy tee flow
+Runs a proxied GET to an [arbitrary](https://gist.githubusercontent.com/mattes/23e64faadb5fd4b5112f379903d2572e/raw/ddbf0a56001367467f71bda64347aa881d83533c/example.json) gist json file.
+
+See `.justfile` for commands, e.g. `just test`. 
 
 ## License
 Licensed under your option of either:
